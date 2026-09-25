@@ -64,7 +64,6 @@ COBERTURA_PEYA = {
 }
 CENTROS_MACRO = {"Quito": {"lat": -0.18, "lon": -78.48}, "Guayaquil": {"lat": -2.145, "lon": -79.90}}
 
-# Lógica de Fechas
 tz_ec = pytz.timezone('America/Guayaquil')
 hoy_dt = datetime.now(tz_ec)
 DIAS_MAP = {
@@ -74,32 +73,33 @@ DIAS_MAP = {
     3: (hoy_dt + timedelta(days=3)).strftime("%d/%m")
 }
 
-# 3. EXTRACCIÓN Y LÓGICA SMART TEXT
+# 3. EXTRACCIÓN CON MEMORIA CACHÉ (Acelera x10)
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_weather_api(lat, lon):
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=4"
+    return requests.get(url, timeout=5).json()
+
 def obtener_clima_completo(lat, lon, offset_dias):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability,wind_gusts_10m&timezone=America%2FGuayaquil&forecast_days=4"
     try:
-        resp = requests.get(url, timeout=5).json()
+        resp = fetch_weather_api(lat, lon)
         lluvia_act = resp.get("current", {}).get("precipitation", 0.0) if offset_dias == 0 else None
         
         horas = resp["hourly"]["time"]
         lluvias = [x if x is not None else 0.0 for x in resp["hourly"]["precipitation"]]
         probs = [x if x is not None else 0 for x in resp["hourly"]["precipitation_probability"]]
-        vientos = [x if x is not None else 0.0 for x in resp["hourly"]["wind_gusts_10m"]]
         
         fecha_objetivo = (hoy_dt + timedelta(days=offset_dias)).strftime("%Y-%m-%d")
         hora_actual_str = hoy_dt.strftime("%Y-%m-%dT%H")
         
-        # Extraer tabla (Desde ahora hasta 23:00 si es "Hoy", o todo el día si es futuro)
         tabla_data = []
         manana_mm, manana_prob = 0.0, 0
         tarde_mm, tarde_prob = 0.0, 0
         noche_mm, noche_prob = 0.0, 0
         
-        for t, rain, prob, wind in zip(horas, lluvias, probs, vientos):
+        for t, rain, prob in zip(horas, lluvias, probs):
             if t.startswith(fecha_objetivo):
                 h = int(t[11:13])
                 
-                # Resumen del día
                 if 6 <= h < 12:
                     manana_mm += rain
                     manana_prob = max(manana_prob, prob)
@@ -110,21 +110,19 @@ def obtener_clima_completo(lat, lon, offset_dias):
                     noche_mm += rain
                     noche_prob = max(noche_prob, prob)
                 
-                # Datos para la tabla (Filtro "Hoy" corta el pasado)
                 if offset_dias == 0 and t < hora_actual_str:
                     continue
                 
-                # Formato visual de la hora (Peaks)
                 hora_label = f"{h:02d}:00"
                 if 12 <= h <= 14: hora_label += " 🍔"
                 elif 19 <= h <= 21: hora_label += " 🍕"
                 
-                tabla_data.append({"Hora": hora_label, "Lluvia (mm)": round(rain,1), "Prob. (%)": prob, "Viento (km/h)": round(wind,1)})
+                tabla_data.append({"Hora": hora_label, "Lluvia (mm)": round(rain, 2), "Prob. (%)": prob})
                 
         resumen_dia = {
-            "Mañana": (round(manana_mm, 1), manana_prob),
-            "Tarde": (round(tarde_mm, 1), tarde_prob),
-            "Noche": (round(noche_mm, 1), noche_prob)
+            "Mañana": (round(manana_mm, 2), manana_prob),
+            "Tarde": (round(tarde_mm, 2), tarde_prob),
+            "Noche": (round(noche_mm, 2), noche_prob)
         }
         return lluvia_act, tabla_data, resumen_dia
     except Exception: 
@@ -135,52 +133,57 @@ def generar_smart_text(resumen, zonas_riesgo=None):
     total = m + t + n
     texto_zonas = f"<br>📍 <b>Atención en:</b> {', '.join(zonas_riesgo)}." if zonas_riesgo else ""
 
-    if total == 0: return "✅ <b>Día Despejado:</b> Sin impacto climático en la operación.", "smart-green"
-    if m >= 3.0 and t >= 3.0 and n >= 3.0: return f"🚨 <b>Alerta General:</b> Lluvias fuertes sostenidas todo el día.{texto_zonas}", "smart-red"
-    if t == max(m, t, n) and t >= 2.0: return f"⚠️ <b>Alerta Lunch/Tarde:</b> Lluvias fuertes ({t}mm). Anticipar flota.{texto_zonas}", "smart-red"
-    if n == max(m, t, n) and n >= 2.0: return f"⚠️ <b>Alerta Dinner/Noche:</b> Lluvias fuertes ({n}mm). Reforzar despachos.{texto_zonas}", "smart-red"
-    if m == max(m, t, n) and m >= 2.0: return f"🌧️ <b>Precaución Matutina:</b> ({m}mm). Mejora para picos de alta demanda.{texto_zonas}", "smart-yellow"
-    return f"🌤️ <b>Condiciones Manejables:</b> Solo garúas breves aisladas.{texto_zonas}", "smart-yellow"
+    if total == 0: 
+        return "✅ <b>Día Despejado:</b> Jornada sin probabilidad de lluvia en esta locación.", "smart-green"
+    if m >= 3.0 and t >= 3.0 and n >= 3.0: 
+        return f"🚨 <b>Alerta General:</b> Se registran lluvias fuertes y sostenidas durante casi todo el día.{texto_zonas}", "smart-red"
+    if t == max(m, t, n) and t >= 2.0: 
+        return f"⚠️ <b>Alerta Lunch / Tarde:</b> Se pronostican lluvias fuertes ({t:.2f}mm) en el turno de la tarde.{texto_zonas}", "smart-red"
+    if n == max(m, t, n) and n >= 2.0: 
+        return f"⚠️ <b>Alerta Dinner / Noche:</b> Condiciones estables de día, pero lloverá fuerte en la noche ({n:.2f}mm).{texto_zonas}", "smart-red"
+    if m == max(m, t, n) and m >= 2.0: 
+        return f"🌧️ <b>Precaución Matutina:</b> Lluvia moderada en la mañana ({m:.2f}mm). Mejoran las condiciones para los picos de demanda.{texto_zonas}", "smart-yellow"
+    
+    return f"🌤️ <b>Condiciones Manejables:</b> Jornada mayormente seca con posibles garúas aisladas.{texto_zonas}", "smart-yellow"
 
 def generar_mini_banner(resumen):
     m, t, n = resumen["Mañana"][0], resumen["Tarde"][0], resumen["Noche"][0]
-    if m+t+n == 0: return "<div class='mini-banner smart-green'>✅ Sin novedad hoy</div>"
+    if m+t+n == 0: return "<div class='mini-banner smart-green'>✅ Sin lluvia prevista</div>"
     pico_mm = max(m, t, n)
     turno = "Mañana" if pico_mm == m else "Tarde" if pico_mm == t else "Noche"
     clase = "smart-red" if pico_mm >= 2.0 else "smart-yellow"
     icono = "⚠️" if pico_mm >= 2.0 else "💧"
-    return f"<div class='mini-banner {clase}'>{icono} Riesgo en {turno} ({pico_mm}mm)</div>"
+    return f"<div class='mini-banner {clase}'>{icono} Riesgo en {turno} ({pico_mm:.2f}mm)</div>"
 
-# Estilos Pandas (Heatmap)
+# Estilos Pandas
 def color_lluvia(val):
     if val >= 5.0: return 'background-color: #ffcdd2; color: #b71c1c'
     elif val >= 1.5: return 'background-color: #ffe0b2; color: #e65100'
     elif val > 0: return 'background-color: #f1f8e9; color: #336600'
     return ''
 
-def color_viento(val):
-    return 'background-color: #e1bee7; color: #4a148c; font-weight: bold' if val >= 40 else ''
-
 # 4. COMPONENTES VISUALES
 def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_smart):
     with st.container(border=True):
         st.markdown(f"<p style='margin:0; font-weight:bold; color:#333; font-size:1.2rem;'>{nombre}</p>", unsafe_allow_html=True)
         
-        # Real-time y Mini Banner
         if lluvia_act is not None:
-            estado = "🚨 Alerta" if lluvia_act >= 7.5 else "🌧️ Lluvia" if lluvia_act >= 2.0 else "💧 Garúa" if lluvia_act > 0 else "☀️ Normal"
-            st.metric(label=estado, value=f"{lluvia_act} mm/h")
+            estado = "🚨 Alerta Fuerte" if lluvia_act >= 7.5 else "🌧️ Lluvia Moderada" if lluvia_act >= 2.0 else "💧 Garúa" if lluvia_act > 0 else "☀️ Normal"
+            st.metric(label=estado, value=f"{lluvia_act:.2f} mm/h")
         if resumen:
             st.markdown(generar_mini_banner(resumen), unsafe_allow_html=True)
             if mostrar_smart:
                 txt, color = generar_smart_text(resumen)
                 st.markdown(f"<div class='smart-text-box {color}' style='padding:8px; font-size:0.8rem;'>{txt}</div>", unsafe_allow_html=True)
 
-        # Tabla Termográfica con Scroll Limitado
         if tabla_data:
             df = pd.DataFrame(tabla_data)
-            styled_df = df.style.map(color_lluvia, subset=['Lluvia (mm)']).map(color_viento, subset=['Viento (km/h)'])
-            st.dataframe(styled_df, use_container_width=True, hide_index=True, height=210) # Altura fija = 5 filas visibles
+            # Aplicar formato de 2 decimales y símbolo %
+            styled_df = df.style.map(color_lluvia, subset=['Lluvia (mm)']).format({
+                "Lluvia (mm)": "{:.2f}",
+                "Prob. (%)": "{:.0f}%"
+            })
+            st.dataframe(styled_df, use_container_width=True, hide_index=True, height=210)
 
 @st.fragment(run_every="5m") 
 def tablero_realtime():
@@ -209,9 +212,9 @@ def tablero_realtime():
         if resumen_macro:
             st.markdown(f"### 📍 Panorama General: {ciudad_sel} ({dia_nombre})")
             c1, c2, c3 = st.columns(3)
-            c1.markdown(f"<div class='resumen-caja'>🌅 Mañana<br><span class='resumen-dato'>{resumen_macro['Mañana'][0]}mm | {resumen_macro['Mañana'][1]}%</span></div>", unsafe_allow_html=True)
-            c2.markdown(f"<div class='resumen-caja'>🌇 Tarde<br><span class='resumen-dato'>{resumen_macro['Tarde'][0]}mm | {resumen_macro['Tarde'][1]}%</span></div>", unsafe_allow_html=True)
-            c3.markdown(f"<div class='resumen-caja'>🌙 Noche<br><span class='resumen-dato'>{resumen_macro['Noche'][0]}mm | {resumen_macro['Noche'][1]}%</span></div>", unsafe_allow_html=True)
+            c1.markdown(f"<div class='resumen-caja'>🌅 Mañana<br><span class='resumen-dato'>{resumen_macro['Mañana'][0]:.2f}mm | {resumen_macro['Mañana'][1]}%</span></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='resumen-caja'>🌇 Tarde<br><span class='resumen-dato'>{resumen_macro['Tarde'][0]:.2f}mm | {resumen_macro['Tarde'][1]}%</span></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='resumen-caja'>🌙 Noche<br><span class='resumen-dato'>{resumen_macro['Noche'][0]:.2f}mm | {resumen_macro['Noche'][1]}%</span></div>", unsafe_allow_html=True)
             txt, col = generar_smart_text(resumen_macro, zonas_riesgo)
             st.markdown(f"<div class='smart-text-box {col}'>{txt}</div>", unsafe_allow_html=True)
             st.divider()

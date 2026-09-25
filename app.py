@@ -11,8 +11,13 @@ st.set_page_config(page_title="Weather LOps - Peya Ecuador", layout="wide", init
 st.markdown("""
 <style>
     .stApp { background-color: #F7F7F7; }
-    h1, h2, h3 { color: #EA044E !important; font-family: 'Arial', sans-serif; }
-    div[data-testid="stMetricValue"] { color: #EA044E !important; font-weight: bold; }
+    /* Solo el título principal h1 será rojo Peya */
+    h1 { color: #EA044E !important; font-family: 'Arial', sans-serif; }
+    /* Los subtítulos h2, h3, h4 serán gris oscuro */
+    h2, h3, h4 { color: #333333 !important; font-family: 'Arial', sans-serif; }
+    /* Los números de las métricas (mm/h) ahora son oscuros, NO rojos */
+    div[data-testid="stMetricValue"] { color: #333333 !important; font-weight: bold; }
+    
     .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 10px;}
     .resumen-titulo { font-size: 0.8rem; color: #666; margin-bottom: 5px; font-weight: bold;}
     .resumen-dato { font-size: 1rem; color: #333; font-weight: bold; }
@@ -73,7 +78,7 @@ DIAS_MAP = {
     3: (hoy_dt + timedelta(days=3)).strftime("%d/%m")
 }
 
-# 3. EXTRACCIÓN CON MEMORIA CACHÉ (Acelera x10)
+# 3. EXTRACCIÓN CON MEMORIA CACHÉ
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_weather_api(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=4"
@@ -178,7 +183,6 @@ def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_sma
 
         if tabla_data:
             df = pd.DataFrame(tabla_data)
-            # Aplicar formato de 2 decimales y símbolo %
             styled_df = df.style.map(color_lluvia, subset=['Lluvia (mm)']).format({
                 "Lluvia (mm)": "{:.2f}",
                 "Prob. (%)": "{:.0f}%"
@@ -267,8 +271,9 @@ st.title("Weather LOps - Peya Ecuador")
 if seccion == "Radar Táctico (4 Días)":
     tablero_realtime()
 else:
-    st.markdown("### 📊 Extracción Logística Nacional")
-    if st.button("Procesar y Descargar Matriz (14 Histórico + 7 Forecast)"):
+    st.markdown("### 📊 Data Completa por Ciudad y Zona: 14 Días Histórico y 7 Días Forecast")
+    st.markdown("Genera la matriz de datos base para modelar incentivos logísticos y analizar performance.")
+    if st.button("Procesar y Descargar Matriz"):
         with st.spinner("Procesando millones de puntos de data..."):
             df_final = generar_dataset_nacional()
             if not df_final.empty:

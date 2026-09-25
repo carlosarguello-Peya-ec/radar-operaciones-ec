@@ -1,11 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import io
 
-# 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS
+# 1. CONFIGURACIÓN Y ESTILOS
 st.set_page_config(page_title="Weather LOps - Peya Ecuador", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -13,18 +13,18 @@ st.markdown("""
     .stApp { background-color: #F7F7F7; }
     h1, h2, h3 { color: #EA044E !important; font-family: 'Arial', sans-serif; }
     div[data-testid="stMetricValue"] { color: #EA044E !important; font-weight: bold; }
-    div[data-testid="stDataFrame"] { width: 100% !important; }
-    .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 15px;}
-    .resumen-titulo { font-size: 0.85rem; color: #666; margin-bottom: 5px; font-weight: bold;}
-    .resumen-dato { font-size: 1.1rem; color: #333; font-weight: bold; }
-    .smart-text-box { padding: 15px; border-radius: 8px; color: #333; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.5; }
+    .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 10px;}
+    .resumen-titulo { font-size: 0.8rem; color: #666; margin-bottom: 5px; font-weight: bold;}
+    .resumen-dato { font-size: 1rem; color: #333; font-weight: bold; }
+    .smart-text-box { padding: 12px; border-radius: 8px; color: #333; font-size: 0.95rem; margin-bottom: 15px; line-height: 1.4; }
     .smart-green { background-color: #E8F5E9; border-left: 5px solid #4CAF50; }
     .smart-yellow { background-color: #FFFDE7; border-left: 5px solid #FBC02D; }
     .smart-red { background-color: #FCE4EC; border-left: 5px solid #EA044E; }
+    .mini-banner { font-size: 0.85rem; padding: 5px 8px; border-radius: 4px; margin-bottom: 10px; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. DICCIONARIO GEOGRÁFICO UNIFICADO (Sin guiones bajos)
+# 2. DICCIONARIO GEOGRÁFICO
 COBERTURA_PEYA = {
     "Quito": { 
         "Norte": {"lat": -0.045, "lon": -78.46}, 
@@ -62,37 +62,44 @@ COBERTURA_PEYA = {
         "El Coca": {"lat": -0.4667, "lon": -76.9833}
     }
 }
+CENTROS_MACRO = {"Quito": {"lat": -0.18, "lon": -78.48}, "Guayaquil": {"lat": -2.145, "lon": -79.90}}
 
-CENTROS_MACRO = {
-    "Quito": {"lat": -0.18, "lon": -78.48},
-    "Guayaquil": {"lat": -2.145, "lon": -79.90}
+# Lógica de Fechas
+tz_ec = pytz.timezone('America/Guayaquil')
+hoy_dt = datetime.now(tz_ec)
+DIAS_MAP = {
+    0: "Hoy",
+    1: "Mañana",
+    2: (hoy_dt + timedelta(days=2)).strftime("%d/%m"),
+    3: (hoy_dt + timedelta(days=3)).strftime("%d/%m")
 }
 
-# 3. LÓGICA DE EXTRACCIÓN Y SEMÁFORO SMART TEXT
-def obtener_clima_completo(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=2"
+# 3. EXTRACCIÓN Y LÓGICA SMART TEXT
+def obtener_clima_completo(lat, lon, offset_dias):
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability,wind_gusts_10m&timezone=America%2FGuayaquil&forecast_days=4"
     try:
         resp = requests.get(url, timeout=5).json()
-        lluvia_act = resp.get("current", {}).get("precipitation", 0.0)
+        lluvia_act = resp.get("current", {}).get("precipitation", 0.0) if offset_dias == 0 else None
+        
         horas = resp["hourly"]["time"]
         lluvias = [x if x is not None else 0.0 for x in resp["hourly"]["precipitation"]]
         probs = [x if x is not None else 0 for x in resp["hourly"]["precipitation_probability"]]
+        vientos = [x if x is not None else 0.0 for x in resp["hourly"]["wind_gusts_10m"]]
         
-        hora_actual_str = resp["current"]["time"][:13]
-        idx_actual = next((i for i, t in enumerate(horas) if t.startswith(hora_actual_str)), 0)
+        fecha_objetivo = (hoy_dt + timedelta(days=offset_dias)).strftime("%Y-%m-%d")
+        hora_actual_str = hoy_dt.strftime("%Y-%m-%dT%H")
         
-        labels_6h = [h[-5:] for h in horas[idx_actual:idx_actual+6]]
-        lluvias_6h = lluvias[idx_actual:idx_actual+6]
-        probs_6h = probs[idx_actual:idx_actual+6]
-        
-        hoy_str = datetime.now(pytz.timezone('America/Guayaquil')).strftime("%Y-%m-%d")
+        # Extraer tabla (Desde ahora hasta 23:00 si es "Hoy", o todo el día si es futuro)
+        tabla_data = []
         manana_mm, manana_prob = 0.0, 0
         tarde_mm, tarde_prob = 0.0, 0
         noche_mm, noche_prob = 0.0, 0
         
-        for t, rain, prob in zip(horas, lluvias, probs):
-            if t.startswith(hoy_str):
+        for t, rain, prob, wind in zip(horas, lluvias, probs, vientos):
+            if t.startswith(fecha_objetivo):
                 h = int(t[11:13])
+                
+                # Resumen del día
                 if 6 <= h < 12:
                     manana_mm += rain
                     manana_prob = max(manana_prob, prob)
@@ -102,128 +109,120 @@ def obtener_clima_completo(lat, lon):
                 elif 18 <= h < 24:
                     noche_mm += rain
                     noche_prob = max(noche_prob, prob)
-                    
+                
+                # Datos para la tabla (Filtro "Hoy" corta el pasado)
+                if offset_dias == 0 and t < hora_actual_str:
+                    continue
+                
+                # Formato visual de la hora (Peaks)
+                hora_label = f"{h:02d}:00"
+                if 12 <= h <= 14: hora_label += " 🍔"
+                elif 19 <= h <= 21: hora_label += " 🍕"
+                
+                tabla_data.append({"Hora": hora_label, "Lluvia (mm)": round(rain,1), "Prob. (%)": prob, "Viento (km/h)": round(wind,1)})
+                
         resumen_dia = {
             "Mañana": (round(manana_mm, 1), manana_prob),
             "Tarde": (round(tarde_mm, 1), tarde_prob),
             "Noche": (round(noche_mm, 1), noche_prob)
         }
-        return lluvia_act, labels_6h, lluvias_6h, probs_6h, resumen_dia
+        return lluvia_act, tabla_data, resumen_dia
     except Exception: 
-        return None, [], [], [], {}
+        return None, [], {}
 
 def generar_smart_text(resumen, zonas_riesgo=None):
-    m = resumen["Mañana"][0]
-    t = resumen["Tarde"][0]
-    n = resumen["Noche"][0]
+    m, t, n = resumen["Mañana"][0], resumen["Tarde"][0], resumen["Noche"][0]
     total = m + t + n
+    texto_zonas = f"<br>📍 <b>Atención en:</b> {', '.join(zonas_riesgo)}." if zonas_riesgo else ""
 
-    texto_zonas = ""
-    if zonas_riesgo and len(zonas_riesgo) > 0:
-        nombres = ", ".join(zonas_riesgo)
-        texto_zonas = f"<br>📍 <b>Poner atención en las siguientes zonas:</b> {nombres}."
+    if total == 0: return "✅ <b>Día Despejado:</b> Sin impacto climático en la operación.", "smart-green"
+    if m >= 3.0 and t >= 3.0 and n >= 3.0: return f"🚨 <b>Alerta General:</b> Lluvias fuertes sostenidas todo el día.{texto_zonas}", "smart-red"
+    if t == max(m, t, n) and t >= 2.0: return f"⚠️ <b>Alerta Lunch/Tarde:</b> Lluvias fuertes ({t}mm). Anticipar flota.{texto_zonas}", "smart-red"
+    if n == max(m, t, n) and n >= 2.0: return f"⚠️ <b>Alerta Dinner/Noche:</b> Lluvias fuertes ({n}mm). Reforzar despachos.{texto_zonas}", "smart-red"
+    if m == max(m, t, n) and m >= 2.0: return f"🌧️ <b>Precaución Matutina:</b> ({m}mm). Mejora para picos de alta demanda.{texto_zonas}", "smart-yellow"
+    return f"🌤️ <b>Condiciones Manejables:</b> Solo garúas breves aisladas.{texto_zonas}", "smart-yellow"
 
-    if total == 0:
-        return "✅ <b>Día Despejado:</b> Jornada sin probabilidad de lluvia. No se prevén impactos climáticos en la operación.", "smart-green"
-    
-    if m >= 3.0 and t >= 3.0 and n >= 3.0:
-        return f"🚨 <b>Alerta General:</b> Lluvias intensas durante casi todo el día. Se sugiere activar protocolos de contingencia.{texto_zonas}", "smart-red"
-    
-    if t == max(m, t, n) and t >= 2.0:
-        return f"⚠️ <b>Alerta en Lunch Peak / Tarde:</b> Se pronostican lluvias fuertes ({t}mm) que impactarán el turno de la tarde.{texto_zonas}", "smart-red"
-    
-    if n == max(m, t, n) and n >= 2.0:
-        return f"⚠️ <b>Alerta en Dinner Peak / Noche:</b> Operación estable de día, pero lloverá fuerte en la noche ({n}mm).{texto_zonas}", "smart-red"
-    
-    if m == max(m, t, n) and m >= 2.0:
-        return f"🌧️ <b>Precaución Matutina:</b> Lluvia moderada en la mañana ({m}mm). Las condiciones mejorarán significativamente para los picos de mayor demanda.{texto_zonas}", "smart-yellow"
-    
-    return f"🌤️ <b>Condiciones Manejables:</b> Jornada mayormente seca. Solo se esperan garúas o chubascos breves.{texto_zonas}", "smart-yellow"
+def generar_mini_banner(resumen):
+    m, t, n = resumen["Mañana"][0], resumen["Tarde"][0], resumen["Noche"][0]
+    if m+t+n == 0: return "<div class='mini-banner smart-green'>✅ Sin novedad hoy</div>"
+    pico_mm = max(m, t, n)
+    turno = "Mañana" if pico_mm == m else "Tarde" if pico_mm == t else "Noche"
+    clase = "smart-red" if pico_mm >= 2.0 else "smart-yellow"
+    icono = "⚠️" if pico_mm >= 2.0 else "💧"
+    return f"<div class='mini-banner {clase}'>{icono} Riesgo en {turno} ({pico_mm}mm)</div>"
+
+# Estilos Pandas (Heatmap)
+def color_lluvia(val):
+    if val >= 5.0: return 'background-color: #ffcdd2; color: #b71c1c'
+    elif val >= 1.5: return 'background-color: #ffe0b2; color: #e65100'
+    elif val > 0: return 'background-color: #f1f8e9; color: #336600'
+    return ''
+
+def color_viento(val):
+    return 'background-color: #e1bee7; color: #4a148c; font-weight: bold' if val >= 40 else ''
 
 # 4. COMPONENTES VISUALES
-def renderizar_banner_ciudad(nombre, resumen, zonas_riesgo):
-    st.markdown(f"### 📍 Panorama General: {nombre}")
-    
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"<div class='resumen-caja'><div class='resumen-titulo'>🌅 Acumulado Mañana</div><div class='resumen-dato'>{resumen['Mañana'][0]}mm | Riesgo: {resumen['Mañana'][1]}%</div></div>", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"<div class='resumen-caja'><div class='resumen-titulo'>🌇 Acumulado Tarde</div><div class='resumen-dato'>{resumen['Tarde'][0]}mm | Riesgo: {resumen['Tarde'][1]}%</div></div>", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"<div class='resumen-caja'><div class='resumen-titulo'>🌙 Acumulado Noche</div><div class='resumen-dato'>{resumen['Noche'][0]}mm | Riesgo: {resumen['Noche'][1]}%</div></div>", unsafe_allow_html=True)
-    
-    texto_inteligente, color_class = generar_smart_text(resumen, zonas_riesgo)
-    st.markdown(f"<div class='smart-text-box {color_class}'>{texto_inteligente}</div>", unsafe_allow_html=True)
-    st.divider()
-
-def renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resumen=None, mostrar_smart_text=False):
-    if lluvia is None:
-        st.error(f"{nombre} - Sin conexión")
-        return
-    
-    estado = "🚨 Alerta Fuerte" if lluvia >= 7.5 else "🌧️ Lluvia Moderada" if lluvia >= 2.0 else "💧 Garúa" if lluvia > 0 else "☀️ Normal"
-    
+def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_smart):
     with st.container(border=True):
         st.markdown(f"<p style='margin:0; font-weight:bold; color:#333; font-size:1.2rem;'>{nombre}</p>", unsafe_allow_html=True)
-        st.metric(label=estado, value=f"{lluvia} mm/h")
         
+        # Real-time y Mini Banner
+        if lluvia_act is not None:
+            estado = "🚨 Alerta" if lluvia_act >= 7.5 else "🌧️ Lluvia" if lluvia_act >= 2.0 else "💧 Garúa" if lluvia_act > 0 else "☀️ Normal"
+            st.metric(label=estado, value=f"{lluvia_act} mm/h")
         if resumen:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown(f"<div class='resumen-caja' style='padding:5px;'><div class='resumen-titulo'>🌅</div><div class='resumen-dato' style='font-size:0.9rem;'>{resumen['Mañana'][0]}mm</div></div>", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"<div class='resumen-caja' style='padding:5px;'><div class='resumen-titulo'>🌇</div><div class='resumen-dato' style='font-size:0.9rem;'>{resumen['Tarde'][0]}mm</div></div>", unsafe_allow_html=True)
-            with c3:
-                st.markdown(f"<div class='resumen-caja' style='padding:5px;'><div class='resumen-titulo'>🌙</div><div class='resumen-dato' style='font-size:0.9rem;'>{resumen['Noche'][0]}mm</div></div>", unsafe_allow_html=True)
-            
-            if mostrar_smart_text:
-                texto_inteligente, color_class = generar_smart_text(resumen)
-                st.markdown(f"<div class='smart-text-box {color_class}' style='padding:10px; font-size:0.85rem; margin-bottom:10px;'>{texto_inteligente}</div>", unsafe_allow_html=True)
-        
-        if labels:
-            st.markdown("<p style='font-size:0.8rem; color:#666; margin: 15px 0 5px 0;'>Pronóstico a 6 horas</p>", unsafe_allow_html=True)
-            df_mostrar = pd.DataFrame({"Hora": labels, "Lluvia (mm/h)": lluvias_val, "Prob. (%)": probs_val})
-            st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+            st.markdown(generar_mini_banner(resumen), unsafe_allow_html=True)
+            if mostrar_smart:
+                txt, color = generar_smart_text(resumen)
+                st.markdown(f"<div class='smart-text-box {color}' style='padding:8px; font-size:0.8rem;'>{txt}</div>", unsafe_allow_html=True)
+
+        # Tabla Termográfica con Scroll Limitado
+        if tabla_data:
+            df = pd.DataFrame(tabla_data)
+            styled_df = df.style.map(color_lluvia, subset=['Lluvia (mm)']).map(color_viento, subset=['Viento (km/h)'])
+            st.dataframe(styled_df, use_container_width=True, hide_index=True, height=210) # Altura fija = 5 filas visibles
 
 @st.fragment(run_every="5m") 
 def tablero_realtime():
-    hora_ec = datetime.now(pytz.timezone('America/Guayaquil')).strftime('%Y-%m-%d %H:%M:%S')
-    st.caption(f"Última actualización: **{hora_ec}** | Refresco automático cada 5 min")
+    st.caption(f"Última actualización: **{hoy_dt.strftime('%H:%M:%S')}** | Refresco 5 min")
     
-    ciudad_sel = st.radio("📍 Selecciona la región operativa:", list(COBERTURA_PEYA.keys()), horizontal=True, label_visibility="collapsed")
+    col_sel1, col_sel2 = st.columns([1, 1])
+    with col_sel1:
+        ciudad_sel = st.radio("📍 Locación:", list(COBERTURA_PEYA.keys()), horizontal=True, label_visibility="collapsed")
+    with col_sel2:
+        dia_nombre = st.radio("🗓️ Horizonte:", list(DIAS_MAP.values()), horizontal=True, label_visibility="collapsed")
+    
+    offset_dias = list(DIAS_MAP.keys())[list(DIAS_MAP.values()).index(dia_nombre)]
     st.divider()
     
     zonas = COBERTURA_PEYA[ciudad_sel]
-    
-    # Pre-calcular data de zonas para saber cuáles tienen riesgo (umbral >= 1.5mm)
-    datos_zonas = {}
-    zonas_riesgo = []
+    datos_zonas, zonas_riesgo = {}, []
     
     for nombre, coords in zonas.items():
-        lluvia, labels, lluvias_val, probs_val, resumen = obtener_clima_completo(coords["lat"], coords["lon"])
-        datos_zonas[nombre] = (lluvia, labels, lluvias_val, probs_val, resumen)
-        if resumen:
-            total_mm = resumen["Mañana"][0] + resumen["Tarde"][0] + resumen["Noche"][0]
-            if total_mm >= 1.5:  
-                zonas_riesgo.append(nombre)
+        lluvia_act, tabla_data, resumen = obtener_clima_completo(coords["lat"], coords["lon"], offset_dias)
+        datos_zonas[nombre] = (lluvia_act, tabla_data, resumen)
+        if resumen and (resumen["Mañana"][0] + resumen["Tarde"][0] + resumen["Noche"][0]) >= 1.5:  
+            zonas_riesgo.append(nombre)
     
-    # 1. Banner Macro (Solo Quito y Guayaquil)
     if ciudad_sel in ["Quito", "Guayaquil"]:
-        coords_macro = CENTROS_MACRO[ciudad_sel]
-        _, _, _, _, resumen_macro = obtener_clima_completo(coords_macro["lat"], coords_macro["lon"])
+        _, _, resumen_macro = obtener_clima_completo(CENTROS_MACRO[ciudad_sel]["lat"], CENTROS_MACRO[ciudad_sel]["lon"], offset_dias)
         if resumen_macro:
-            renderizar_banner_ciudad(ciudad_sel, resumen_macro, zonas_riesgo)
+            st.markdown(f"### 📍 Panorama General: {ciudad_sel} ({dia_nombre})")
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"<div class='resumen-caja'>🌅 Mañana<br><span class='resumen-dato'>{resumen_macro['Mañana'][0]}mm | {resumen_macro['Mañana'][1]}%</span></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='resumen-caja'>🌇 Tarde<br><span class='resumen-dato'>{resumen_macro['Tarde'][0]}mm | {resumen_macro['Tarde'][1]}%</span></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='resumen-caja'>🌙 Noche<br><span class='resumen-dato'>{resumen_macro['Noche'][0]}mm | {resumen_macro['Noche'][1]}%</span></div>", unsafe_allow_html=True)
+            txt, col = generar_smart_text(resumen_macro, zonas_riesgo)
+            st.markdown(f"<div class='smart-text-box {col}'>{txt}</div>", unsafe_allow_html=True)
+            st.divider()
     
-    # 2. Desglose Operativo
-    st.markdown("#### 🎯 Radar Táctico por Locación")
     cols = st.columns(2)
-    
     for i, (nombre, data) in enumerate(datos_zonas.items()):
-        lluvia, labels, lluvias_val, probs_val, resumen = data
-        mostrar_smart = True if ciudad_sel == "Potential Cities" else False
+        lluvia_act, tabla_data, resumen = data
         with cols[i % 2]: 
-            renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resumen, mostrar_smart)
+            renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, ciudad_sel=="Potential Cities")
 
+# 5. MENÚ LATERAL Y EXCEL (Histórico)
 def clasificar_ocasion(hora):
     if 0 <= hora < 7: return "1.Madrugada"
     elif 7 <= hora < 10: return "2.Mañana"
@@ -231,84 +230,47 @@ def clasificar_ocasion(hora):
     elif 12 <= hora < 15: return "4.Lunch Peak"
     elif 15 <= hora < 18: return "5.Tarde"
     elif 18 <= hora < 21: return "6.Dinner Peak"
-    elif 21 <= hora < 23: return "7.Post Peak - Noche"
-    else: return "8.Noche"
+    else: return "7.Post Peak - Noche"
 
 @st.cache_data(show_spinner=False, ttl="1h")
 def generar_dataset_nacional():
     registros = []
     for region, locaciones in COBERTURA_PEYA.items():
         for zona, coords in locaciones.items():
-            ciudad = region if region in ["Quito", "Guayaquil"] else zona
-            zona_nom = zona if region in ["Quito", "Guayaquil"] else ciudad
-            
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&past_days=14&forecast_days=7"
+            ciudad, zona_nom = (region, zona) if region in ["Quito", "Guayaquil"] else (zona, region)
             try:
+                url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&past_days=14&forecast_days=7"
                 resp = requests.get(url, timeout=10).json()
-                tiempos = resp["hourly"]["time"]
-                lluvias = resp["hourly"]["precipitation"]
-                probs = resp["hourly"].get("precipitation_probability", [])
-                
-                for i in range(len(tiempos)):
-                    dt = datetime.strptime(tiempos[i], "%Y-%m-%dT%H:%M")
-                    precip = lluvias[i] if lluvias[i] is not None else 0.0
-                    prob = probs[i] if (i < len(probs) and probs[i] is not None) else 0
-                    
-                    registros.append({
-                        "fecha": dt.strftime("%Y-%m-%d"), 
-                        "city_name": ciudad, 
-                        "zone_name": zona_nom, 
-                        "hora_int": dt.hour, 
-                        "lluvia_mm": precip,
-                        "probabilidad_lluvia_%": prob
-                    })
-            except: 
-                continue
-
+                for i, t in enumerate(resp["hourly"]["time"]):
+                    dt = datetime.strptime(t, "%Y-%m-%dT%H:%M")
+                    rain = resp["hourly"]["precipitation"][i] or 0.0
+                    prob = resp["hourly"].get("precipitation_probability", [])
+                    p = prob[i] if i < len(prob) and prob[i] else 0
+                    registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": rain, "probabilidad_%": p})
+            except: continue
+    
     df = pd.DataFrame(registros)
     if not df.empty:
         df["ocasion"] = df["hora_int"].apply(clasificar_ocasion)
-        df_agr = df.groupby(["fecha", "city_name", "zone_name", "ocasion"]).agg({
-            "lluvia_mm": "sum",
-            "probabilidad_lluvia_%": "max"
-        }).reset_index()
-        
+        df_agr = df.groupby(["fecha", "city_name", "zone_name", "ocasion"]).agg({"lluvia_mm": "sum", "probabilidad_%": "max"}).reset_index()
         df_agr["lluvia_mm"] = df_agr["lluvia_mm"].round(2)
-        df_agr = df_agr.rename(columns={"lluvia_mm": "lluvia_acumulada_mm"}).sort_values(by=["fecha", "city_name", "ocasion"])
-        return df_agr
+        return df_agr.sort_values(by=["fecha", "city_name", "ocasion"])
     return pd.DataFrame()
 
-# 5. MENÚ LATERAL Y NAVEGACIÓN
 st.sidebar.title("☁️ LOps Tools")
-st.sidebar.markdown("---")
-seccion = st.sidebar.radio("Navegación:", ["Radar Operativo (En vivo)", "Data Histórica (Excel)"])
+seccion = st.sidebar.radio("Navegación:", ["Radar Táctico (4 Días)", "Centro de Datos (Excel)"])
+st.title("Weather LOps - Peya Ecuador")
 
-st.title("Weather LOps & Data - Peya Ecuador")
-
-if seccion == "Radar Operativo (En vivo)":
+if seccion == "Radar Táctico (4 Días)":
     tablero_realtime()
-
-elif seccion == "Data Histórica (Excel)":
-    st.markdown("### 📊 Extracción de Datos Base")
-    st.markdown("Genera la matriz nacional consolidada (14 días de histórico real + 7 días de pronóstico).")
-    
-    if st.button("Procesar y Descargar Reporte"):
-        with st.spinner("Conectando con estaciones meteorológicas... (tomará ~15 seg)"):
+else:
+    st.markdown("### 📊 Extracción Logística Nacional")
+    if st.button("Procesar y Descargar Matriz (14 Histórico + 7 Forecast)"):
+        with st.spinner("Procesando millones de puntos de data..."):
             df_final = generar_dataset_nacional()
             if not df_final.empty:
-                st.success(f"¡Data lista! {len(df_final)} filas procesadas.")
+                st.success("Data lista.")
                 st.dataframe(df_final, use_container_width=True, hide_index=True)
-                
                 buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_final.to_excel(writer, index=False, sheet_name='Weather_PeYa')
-                
-                st.download_button(
-                    label="📥 Descargar Excel (.xlsx)",
-                    data=buffer.getvalue(),
-                    file_name=f"PeYa_Weather_Data_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
-            else:
-                st.error("Error descargando la data. Intenta de nuevo.")
+                with pd.ExcelWriter(buffer, engine='openpyxl') as w: df_final.to_excel(w, index=False)
+                st.download_button("📥 Descargar Excel", buffer.getvalue(), f"PeYa_Weather_{hoy_dt.strftime('%Y%m%d')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")

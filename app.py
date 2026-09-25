@@ -17,7 +17,10 @@ st.markdown("""
     .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 15px;}
     .resumen-titulo { font-size: 0.85rem; color: #666; margin-bottom: 5px; font-weight: bold;}
     .resumen-dato { font-size: 1.1rem; color: #333; font-weight: bold; }
-    .smart-text-box { background-color: #FCE4EC; padding: 15px; border-radius: 8px; border-left: 5px solid #EA044E; color: #333; font-size: 0.95rem; margin-bottom: 20px;}
+    .smart-text-box { padding: 15px; border-radius: 8px; color: #333; font-size: 0.95rem; margin-bottom: 20px; }
+    .smart-green { background-color: #E8F5E9; border-left: 5px solid #4CAF50; }
+    .smart-yellow { background-color: #FFFDE7; border-left: 5px solid #FBC02D; }
+    .smart-red { background-color: #FCE4EC; border-left: 5px solid #EA044E; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,13 +63,12 @@ COBERTURA_PEYA = {
     }
 }
 
-# Coordenadas centrales para el resumen macro de la ciudad principal
 CENTROS_MACRO = {
     "Quito": {"lat": -0.18, "lon": -78.48},
     "Guayaquil": {"lat": -2.145, "lon": -79.90}
 }
 
-# 3. MÓDULOS DE EXTRACCIÓN Y LÓGICA SMART TEXT
+# 3. LÓGICA DE EXTRACCIÓN Y SEMÁFORO SMART TEXT
 def obtener_clima_completo(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=2"
     try:
@@ -106,36 +108,40 @@ def obtener_clima_completo(lat, lon):
             "Tarde": (round(tarde_mm, 1), tarde_prob),
             "Noche": (round(noche_mm, 1), noche_prob)
         }
-        
         return lluvia_act, labels_6h, lluvias_6h, probs_6h, resumen_dia
     except Exception: 
         return None, [], [], [], {}
 
-def generar_smart_text(resumen):
+def generar_smart_text(resumen, zonas_riesgo=None):
     m = resumen["Mañana"][0]
     t = resumen["Tarde"][0]
     n = resumen["Noche"][0]
     total = m + t + n
 
+    texto_zonas = ""
+    if zonas_riesgo and len(zonas_riesgo) > 0:
+        nombres = ", ".join(zonas_riesgo)
+        texto_zonas = f" 📍 **Prestar mayor atención operativa en:** {nombres}."
+
     if total == 0:
-        return "✅ **Operación Óptima:** Día completamente seco. No se prevén riesgos climáticos para la flota hoy."
+        return "✅ **Día Despejado:** Jornada sin probabilidad de lluvia. No se prevén impactos climáticos en la operación y los tiempos de entrega.", "smart-green"
     
     if m >= 3.0 and t >= 3.0 and n >= 3.0:
-        return "🚨 **Día Complejo:** Lluvias persistentes y considerables durante toda la jornada. Recomendado activar protocolos de contingencia desde temprano."
+        return f"🚨 **Alerta General:** Lluvias intensas durante casi todo el día. Se sugiere activar protocolos de contingencia de inmediato.{texto_zonas}", "smart-red"
     
     if t == max(m, t, n) and t >= 2.0:
-        return f"⚠️ **Alerta en Lunch Peak:** El clima se mantendrá manejable en otros horarios, pero atención máxima por lluvias fuertes en la Tarde ({t}mm). Prever impacto operativo."
+        return f"⚠️ **Alerta en Lunch Peak / Tarde:** Se pronostican lluvias fuertes ({t}mm) que impactarán el turno de la tarde. Anticipar flota e incrementos en tiempos de entrega.{texto_zonas}", "smart-red"
     
     if n == max(m, t, n) and n >= 2.0:
-        return f"⚠️ **Alerta en Dinner Peak:** Las condiciones empeorarán hacia la Noche acumulando {n}mm. Prever alta demanda y posibles retrasos de flota."
+        return f"⚠️ **Alerta en Dinner Peak / Noche:** Operación estable de día, pero lloverá fuerte en la noche ({n}mm). Reforzar la disponibilidad de repartidores en ese turno.{texto_zonas}", "smart-red"
     
     if m == max(m, t, n) and m >= 2.0:
-        return f"🌧️ **Precaución Matutina:** El día arranca con lluvias ({m}mm), pero la tendencia es a mejorar para los picos operativos de Tarde y Noche."
+        return f"🌧️ **Precaución Matutina:** Lluvia moderada en la mañana ({m}mm). Las condiciones mejorarán significativamente para los picos de mayor demanda.{texto_zonas}", "smart-yellow"
     
-    return "🌤️ **Condiciones Estables:** Día mayormente seco con posibilidad de garúas ligeras o aisladas que no deberían afectar severamente el servicio."
+    return f"🌤️ **Condiciones Manejables:** Jornada mayormente seca. Solo se esperan garúas o chubascos breves que no deberían afectar la logística habitual.{texto_zonas}", "smart-yellow"
 
 # 4. COMPONENTES VISUALES
-def renderizar_banner_ciudad(nombre, resumen):
+def renderizar_banner_ciudad(nombre, resumen, zonas_riesgo):
     st.markdown(f"### 📍 Panorama General: {nombre}")
     
     c1, c2, c3 = st.columns(3)
@@ -146,8 +152,8 @@ def renderizar_banner_ciudad(nombre, resumen):
     with c3:
         st.markdown(f"<div class='resumen-caja'><div class='resumen-titulo'>🌙 Acumulado Noche</div><div class='resumen-dato'>{resumen['Noche'][0]}mm | Riesgo: {resumen['Noche'][1]}%</div></div>", unsafe_allow_html=True)
     
-    texto_inteligente = generar_smart_text(resumen)
-    st.markdown(f"<div class='smart-text-box'>{texto_inteligente}</div>", unsafe_allow_html=True)
+    texto_inteligente, color_class = generar_smart_text(resumen, zonas_riesgo)
+    st.markdown(f"<div class='smart-text-box {color_class}'>{texto_inteligente}</div>", unsafe_allow_html=True)
     st.divider()
 
 def renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resumen=None, mostrar_smart_text=False):
@@ -171,8 +177,8 @@ def renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resu
                 st.markdown(f"<div class='resumen-caja' style='padding:5px;'><div class='resumen-titulo'>🌙</div><div class='resumen-dato' style='font-size:0.9rem;'>{resumen['Noche'][0]}mm</div></div>", unsafe_allow_html=True)
             
             if mostrar_smart_text:
-                texto_inteligente = generar_smart_text(resumen)
-                st.markdown(f"<p style='font-size:0.85rem; color:#444; background-color:#FCE4EC; padding:8px; border-radius:5px;'>{texto_inteligente}</p>", unsafe_allow_html=True)
+                texto_inteligente, color_class = generar_smart_text(resumen)
+                st.markdown(f"<div class='smart-text-box {color_class}' style='padding:10px; font-size:0.85rem; margin-bottom:10px;'>{texto_inteligente}</div>", unsafe_allow_html=True)
         
         if labels:
             st.markdown("<p style='font-size:0.8rem; color:#666; margin: 15px 0 5px 0;'>Pronóstico a 6 horas</p>", unsafe_allow_html=True)
@@ -187,26 +193,36 @@ def tablero_realtime():
     ciudad_sel = st.radio("📍 Selecciona la región operativa:", list(COBERTURA_PEYA.keys()), horizontal=True, label_visibility="collapsed")
     st.divider()
     
+    zonas = COBERTURA_PEYA[ciudad_sel]
+    
+    # Pre-calcular data de zonas para saber cuáles tienen riesgo (umbral >= 1.5mm)
+    datos_zonas = {}
+    zonas_riesgo = []
+    
+    for nombre, coords in zonas.items():
+        lluvia, labels, lluvias_val, probs_val, resumen = obtener_clima_completo(coords["lat"], coords["lon"])
+        datos_zonas[nombre] = (lluvia, labels, lluvias_val, probs_val, resumen)
+        if resumen:
+            total_mm = resumen["Mañana"][0] + resumen["Tarde"][0] + resumen["Noche"][0]
+            if total_mm >= 1.5:  
+                zonas_riesgo.append(nombre)
+    
     # 1. Banner Macro (Solo Quito y Guayaquil)
     if ciudad_sel in ["Quito", "Guayaquil"]:
         coords_macro = CENTROS_MACRO[ciudad_sel]
         _, _, _, _, resumen_macro = obtener_clima_completo(coords_macro["lat"], coords_macro["lon"])
         if resumen_macro:
-            renderizar_banner_ciudad(ciudad_sel, resumen_macro)
+            renderizar_banner_ciudad(ciudad_sel, resumen_macro, zonas_riesgo)
     
-    # 2. Desglose Operativo (Zonas o Ciudades Potenciales)
+    # 2. Desglose Operativo
     st.markdown("#### 🎯 Radar Táctico por Locación")
-    zonas = COBERTURA_PEYA[ciudad_sel]
     cols = st.columns(2)
     
-    for i, (nombre, coords) in enumerate(zonas.items()):
-        lluvia, labels, lluvias_val, probs_val, resumen = obtener_clima_completo(coords["lat"], coords["lon"])
-        
-        # En Potential Cities mostramos el Smart Text directo en cada tarjeta porque son ciudades individuales
+    for i, (nombre, data) in enumerate(datos_zonas.items()):
+        lluvia, labels, lluvias_val, probs_val, resumen = data
         mostrar_smart = True if ciudad_sel == "Potential Cities" else False
-        
         with cols[i % 2]: 
-            renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resumen, mostrar_smart_text=mostrar_smart)
+            renderizar_tarjeta_zona(nombre, lluvia, labels, lluvias_val, probs_val, resumen, mostrar_smart)
 
 def clasificar_ocasion(hora):
     if 0 <= hora < 7: return "1.Madrugada"

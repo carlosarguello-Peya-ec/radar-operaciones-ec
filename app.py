@@ -17,27 +17,27 @@ st.markdown("""
     .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 15px;}
     .resumen-titulo { font-size: 0.85rem; color: #666; margin-bottom: 5px; font-weight: bold;}
     .resumen-dato { font-size: 1.1rem; color: #333; font-weight: bold; }
-    .smart-text-box { padding: 15px; border-radius: 8px; color: #333; font-size: 0.95rem; margin-bottom: 20px; }
+    .smart-text-box { padding: 15px; border-radius: 8px; color: #333; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.5; }
     .smart-green { background-color: #E8F5E9; border-left: 5px solid #4CAF50; }
     .smart-yellow { background-color: #FFFDE7; border-left: 5px solid #FBC02D; }
     .smart-red { background-color: #FCE4EC; border-left: 5px solid #EA044E; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. DICCIONARIO GEOGRÁFICO UNIFICADO
+# 2. DICCIONARIO GEOGRÁFICO UNIFICADO (Sin guiones bajos)
 COBERTURA_PEYA = {
     "Quito": { 
         "Norte": {"lat": -0.045, "lon": -78.46}, 
         "Carapungo": {"lat": -0.095, "lon": -78.44}, 
         "Centro": {"lat": -0.18, "lon": -78.48}, 
         "Sur": {"lat": -0.28, "lon": -78.54}, 
-        "Cumbaya_Tumbaco": {"lat": -0.21, "lon": -78.40}, 
-        "Valle_Chillos": {"lat": -0.29, "lon": -78.45} 
+        "Cumbaya Tumbaco": {"lat": -0.21, "lon": -78.40}, 
+        "Valle Chillos": {"lat": -0.29, "lon": -78.45} 
     },
     "Guayaquil": { 
-        "Centro_Norte": {"lat": -2.145, "lon": -79.90}, 
+        "Centro Norte": {"lat": -2.145, "lon": -79.90}, 
         "Oeste": {"lat": -2.185, "lon": -79.95}, 
-        "Samborondon_Aurora": {"lat": -2.115, "lon": -79.87}, 
+        "Samborondon Aurora": {"lat": -2.115, "lon": -79.87}, 
         "Sur": {"lat": -2.235, "lon": -79.89}, 
         "Duran": {"lat": -2.175, "lon": -79.82} 
     },
@@ -121,24 +121,24 @@ def generar_smart_text(resumen, zonas_riesgo=None):
     texto_zonas = ""
     if zonas_riesgo and len(zonas_riesgo) > 0:
         nombres = ", ".join(zonas_riesgo)
-        texto_zonas = f" 📍 **Prestar mayor atención operativa en:** {nombres}."
+        texto_zonas = f"<br>📍 <b>Poner atención en las siguientes zonas:</b> {nombres}."
 
     if total == 0:
-        return "✅ **Día Despejado:** Jornada sin probabilidad de lluvia. No se prevén impactos climáticos en la operación y los tiempos de entrega.", "smart-green"
+        return "✅ <b>Día Despejado:</b> Jornada sin probabilidad de lluvia. No se prevén impactos climáticos en la operación.", "smart-green"
     
     if m >= 3.0 and t >= 3.0 and n >= 3.0:
-        return f"🚨 **Alerta General:** Lluvias intensas durante casi todo el día. Se sugiere activar protocolos de contingencia de inmediato.{texto_zonas}", "smart-red"
+        return f"🚨 <b>Alerta General:</b> Lluvias intensas durante casi todo el día. Se sugiere activar protocolos de contingencia.{texto_zonas}", "smart-red"
     
     if t == max(m, t, n) and t >= 2.0:
-        return f"⚠️ **Alerta en Lunch Peak / Tarde:** Se pronostican lluvias fuertes ({t}mm) que impactarán el turno de la tarde. Anticipar flota e incrementos en tiempos de entrega.{texto_zonas}", "smart-red"
+        return f"⚠️ <b>Alerta en Lunch Peak / Tarde:</b> Se pronostican lluvias fuertes ({t}mm) que impactarán el turno de la tarde.{texto_zonas}", "smart-red"
     
     if n == max(m, t, n) and n >= 2.0:
-        return f"⚠️ **Alerta en Dinner Peak / Noche:** Operación estable de día, pero lloverá fuerte en la noche ({n}mm). Reforzar la disponibilidad de repartidores en ese turno.{texto_zonas}", "smart-red"
+        return f"⚠️ <b>Alerta en Dinner Peak / Noche:</b> Operación estable de día, pero lloverá fuerte en la noche ({n}mm).{texto_zonas}", "smart-red"
     
     if m == max(m, t, n) and m >= 2.0:
-        return f"🌧️ **Precaución Matutina:** Lluvia moderada en la mañana ({m}mm). Las condiciones mejorarán significativamente para los picos de mayor demanda.{texto_zonas}", "smart-yellow"
+        return f"🌧️ <b>Precaución Matutina:</b> Lluvia moderada en la mañana ({m}mm). Las condiciones mejorarán significativamente para los picos de mayor demanda.{texto_zonas}", "smart-yellow"
     
-    return f"🌤️ **Condiciones Manejables:** Jornada mayormente seca. Solo se esperan garúas o chubascos breves que no deberían afectar la logística habitual.{texto_zonas}", "smart-yellow"
+    return f"🌤️ <b>Condiciones Manejables:</b> Jornada mayormente seca. Solo se esperan garúas o chubascos breves.{texto_zonas}", "smart-yellow"
 
 # 4. COMPONENTES VISUALES
 def renderizar_banner_ciudad(nombre, resumen, zonas_riesgo):

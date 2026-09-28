@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import pytz
 import io
 
-# 1. CONFIGURACIÓN Y ESTILOS
 st.set_page_config(page_title="Weather LOps - Peya Ecuador", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""

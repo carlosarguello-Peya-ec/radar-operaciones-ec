@@ -69,19 +69,24 @@ CENTROS_MACRO = {"Quito": {"lat": -0.18, "lon": -78.48}, "Guayaquil": {"lat": -2
 
 tz_ec = pytz.timezone('America/Guayaquil')
 hoy_dt = datetime.now(tz_ec)
+# WeatherAPI Free permite 3 días de forecast
 DIAS_MAP = {
     0: "Hoy",
     1: "Mañana",
-    2: (hoy_dt + timedelta(days=2)).strftime("%d/%m"),
-    3: (hoy_dt + timedelta(days=3)).strftime("%d/%m")
+    2: (hoy_dt + timedelta(days=2)).strftime("%d/%m")
 }
 
-# 3. EXTRACCIÓN RÁPIDA (FAIL FAST)
+try:
+    API_KEY = st.secrets["WEATHER_API_KEY"]
+except:
+    API_KEY = None
+
+# 3. EXTRACCIÓN RÁPIDA (WEATHERAPI)
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_weather_api(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=4"
+def fetch_weatherapi_forecast(lat, lon):
+    if not API_KEY: return None
+    url = f"https://api.weatherapi.com/v1/forecast.json?key={API_KEY}&q={lat},{lon}&days=3&aqi=no&alerts=no"
     try:
-        # Falla rápido: Si en 4 segundos no responde, abandona la consulta para no congelar la app
         resp = requests.get(url, timeout=4)
         if resp.status_code == 200:
             return resp.json()
@@ -91,46 +96,51 @@ def fetch_weather_api(lat, lon):
 
 def obtener_clima_completo(lat, lon, offset_dias):
     try:
-        resp = fetch_weather_api(lat, lon)
+        resp = fetch_weatherapi_forecast(lat, lon)
         if not resp: 
             return None, [], {}
             
-        lluvia_act = resp.get("current", {}).get("precipitation", 0.0) if offset_dias == 0 else None
+        lluvia_act = resp.get("current", {}).get("precip_mm", 0.0) if offset_dias == 0 else None
         
-        horas = resp["hourly"]["time"]
-        lluvias = [x if x is not None else 0.0 for x in resp["hourly"]["precipitation"]]
-        probs = [x if x is not None else 0 for x in resp["hourly"]["precipitation_probability"]]
+        forecast_days = resp.get("forecast", {}).get("forecastday", [])
+        if offset_dias >= len(forecast_days):
+            return lluvia_act, [], {}
+            
+        target_day = forecast_days[offset_dias]
+        horas = target_day.get("hour", [])
         
-        fecha_objetivo = (hoy_dt + timedelta(days=offset_dias)).strftime("%Y-%m-%d")
-        hora_actual_str = hoy_dt.strftime("%Y-%m-%dT%H")
+        hora_actual_str = hoy_dt.strftime("%Y-%m-%d %H:00")
         
         tabla_data = []
         manana_mm, manana_prob = 0.0, 0
         tarde_mm, tarde_prob = 0.0, 0
         noche_mm, noche_prob = 0.0, 0
         
-        for t, rain, prob in zip(horas, lluvias, probs):
-            if t.startswith(fecha_objetivo):
-                h = int(t[11:13])
-                
-                if 6 <= h < 12:
-                    manana_mm += rain
-                    manana_prob = max(manana_prob, prob)
-                elif 12 <= h < 18:
-                    tarde_mm += rain
-                    tarde_prob = max(tarde_prob, prob)
-                elif 18 <= h < 24:
-                    noche_mm += rain
-                    noche_prob = max(noche_prob, prob)
-                
-                if offset_dias == 0 and t < hora_actual_str:
-                    continue
-                
-                hora_label = f"{h:02d}:00"
-                if 12 <= h <= 14: hora_label += " 🍔"
-                elif 19 <= h <= 21: hora_label += " 🍕"
-                
-                tabla_data.append({"Hora": hora_label, "Lluvia (mm)": round(rain, 2), "Prob. (%)": prob})
+        for h_data in horas:
+            t = h_data["time"] # Formato: "YYYY-MM-DD HH:MM"
+            h = int(t[11:13])
+            rain = h_data.get("precip_mm", 0.0)
+            prob = h_data.get("chance_of_rain", 0)
+            
+            if 6 <= h < 12:
+                manana_mm += rain
+                manana_prob = max(manana_prob, prob)
+            elif 12 <= h < 18:
+                tarde_mm += rain
+                tarde_prob = max(tarde_prob, prob)
+            elif 18 <= h < 24:
+                noche_mm += rain
+                noche_prob = max(noche_prob, prob)
+            
+            # Filtro para no mostrar horas pasadas de "Hoy"
+            if offset_dias == 0 and t < hora_actual_str:
+                continue
+            
+            hora_label = f"{h:02d}:00"
+            if 12 <= h <= 14: hora_label += " 🍔"
+            elif 19 <= h <= 21: hora_label += " 🍕"
+            
+            tabla_data.append({"Hora": hora_label, "Lluvia (mm)": round(rain, 2), "Prob. (%)": prob})
                 
         resumen_dia = {
             "Mañana": (round(manana_mm, 2), manana_prob),
@@ -180,7 +190,7 @@ def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_sma
         st.markdown(f"<p style='margin:0; font-weight:bold; color:#333; font-size:1.2rem;'>{nombre}</p>", unsafe_allow_html=True)
         
         if not resumen:
-            st.warning("⚠️ Sin conexión (API saturada). Intenta en unos minutos.")
+            st.warning("⚠️ Sin conexión a API. Revisa la llave de acceso.")
             return
 
         if lluvia_act is not None:
@@ -205,6 +215,10 @@ def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_sma
 def tablero_realtime():
     st.caption(f"Última actualización: **{hoy_dt.strftime('%H:%M:%S')}** | Refresco 5 min")
     
+    if not API_KEY:
+        st.error("🚨 Llave de WeatherAPI no detectada. Por favor configúrala en Streamlit Secrets.")
+        return
+
     col_sel1, col_sel2 = st.columns([1, 1])
     with col_sel1:
         ciudad_sel = st.radio("📍 Locación:", list(COBERTURA_PEYA.keys()), horizontal=True, label_visibility="collapsed")
@@ -241,7 +255,7 @@ def tablero_realtime():
         with cols[i % 2]: 
             renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, ciudad_sel=="Potential Cities")
 
-# 5. MENÚ LATERAL Y EXCEL
+# 5. MENÚ LATERAL Y EXCEL (Adaptado a WeatherAPI)
 def clasificar_ocasion(hora):
     if 0 <= hora < 7: return "1.Madrugada"
     elif 7 <= hora < 10: return "2.Mañana"
@@ -253,27 +267,36 @@ def clasificar_ocasion(hora):
 
 @st.cache_data(show_spinner=False, ttl="1h")
 def generar_dataset_nacional():
+    if not API_KEY: return pd.DataFrame()
     registros = []
+    
+    fechas_historicas = [(hoy_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
+    
     for region, locaciones in COBERTURA_PEYA.items():
         for zona, coords in locaciones.items():
             ciudad, zona_nom = (region, zona) if region in ["Quito", "Guayaquil"] else (zona, region)
+            
+            # 1. Extraer Forecast (Hoy + 2 días)
             try:
-                url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&past_days=14&forecast_days=7"
-                # Freno táctico integrado directamente
-                time.sleep(0.4) 
-                resp = requests.get(url, timeout=5)
-                if resp.status_code != 200:
-                    continue
-                resp_json = resp.json()
+                url_fcst = f"https://api.weatherapi.com/v1/forecast.json?key={API_KEY}&q={coords['lat']},{coords['lon']}&days=3"
+                resp_fcst = requests.get(url_fcst, timeout=5).json()
+                for day_data in resp_fcst.get("forecast", {}).get("forecastday", []):
+                    for h_data in day_data.get("hour", []):
+                        dt = datetime.strptime(h_data["time"], "%Y-%m-%d %H:%M")
+                        registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": h_data.get("precip_mm", 0.0), "probabilidad_%": h_data.get("chance_of_rain", 0)})
+            except: pass
+            
+            # 2. Extraer Histórico (Últimos 7 días)
+            for fecha_hist in fechas_historicas:
+                try:
+                    url_hist = f"https://api.weatherapi.com/v1/history.json?key={API_KEY}&q={coords['lat']},{coords['lon']}&dt={fecha_hist}"
+                    resp_hist = requests.get(url_hist, timeout=5).json()
+                    for day_data in resp_hist.get("forecast", {}).get("forecastday", []):
+                        for h_data in day_data.get("hour", []):
+                            dt = datetime.strptime(h_data["time"], "%Y-%m-%d %H:%M")
+                            registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": h_data.get("precip_mm", 0.0), "probabilidad_%": h_data.get("chance_of_rain", 0)})
+                except: pass
                 
-                for i, t in enumerate(resp_json["hourly"]["time"]):
-                    dt = datetime.strptime(t, "%Y-%m-%dT%H:%M")
-                    rain = resp_json["hourly"]["precipitation"][i] or 0.0
-                    prob = resp_json["hourly"].get("precipitation_probability", [])
-                    p = prob[i] if i < len(prob) and prob[i] else 0
-                    registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": rain, "probabilidad_%": p})
-            except: continue
-    
     df = pd.DataFrame(registros)
     if not df.empty:
         df["ocasion"] = df["hora_int"].apply(clasificar_ocasion)
@@ -283,16 +306,16 @@ def generar_dataset_nacional():
     return pd.DataFrame()
 
 st.sidebar.title("☁️ LOps Tools")
-seccion = st.sidebar.radio("Navegación:", ["Radar Táctico (4 Días)", "Centro de Datos (Excel)"])
+seccion = st.sidebar.radio("Navegación:", ["Radar Táctico (3 Días)", "Centro de Datos (Excel)"])
 st.title("Weather LOps - Peya Ecuador")
 
-if seccion == "Radar Táctico (4 Días)":
+if seccion == "Radar Táctico (3 Días)":
     tablero_realtime()
 else:
-    st.markdown("### 📊 Data Completa por Ciudad y Zona: 14 Días Histórico y 7 Días Forecast")
+    st.markdown("### 📊 Data Completa por Ciudad y Zona: 7 Días Histórico y 3 Días Forecast")
     st.markdown("Genera la matriz de datos base para modelar incentivos logísticos y analizar performance.")
     if st.button("Procesar y Descargar Matriz"):
-        with st.spinner("Conectando satélites (Esto tomará unos 15 segundos por seguridad)..."):
+        with st.spinner("Conectando con WeatherAPI (Recopilando datos de 30 locaciones x 10 días)..."):
             df_final = generar_dataset_nacional()
             if not df_final.empty:
                 st.success("Data lista.")
@@ -301,4 +324,4 @@ else:
                 with pd.ExcelWriter(buffer, engine='openpyxl') as w: df_final.to_excel(w, index=False)
                 st.download_button("📥 Descargar Excel", buffer.getvalue(), f"PeYa_Weather_{hoy_dt.strftime('%Y%m%d')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
             else:
-                st.error("⚠️ La API está temporalmente bloqueada. Intenta en 15 minutos.")
+                st.error("⚠️ No se pudo generar la matriz. Revisa tu conexión o la API Key.")

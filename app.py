@@ -1,19 +1,13 @@
 import streamlit as st
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 import io
 import time
 
-# 1. CONFIGURACIÓN DE PÁGINA Y SESIÓN BLINDADA (ANTI-BLOQUEOS)
+# 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(page_title="Weather LOps - Peya Ecuador", layout="wide", initial_sidebar_state="expanded")
-
-session = requests.Session()
-retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-session.mount('https://', HTTPAdapter(max_retries=retries))
 
 st.markdown("""
 <style>
@@ -82,15 +76,25 @@ DIAS_MAP = {
     3: (hoy_dt + timedelta(days=3)).strftime("%d/%m")
 }
 
-# 3. EXTRACCIÓN CON MEMORIA CACHÉ
+# 3. EXTRACCIÓN RÁPIDA (FAIL FAST)
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_weather_api(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=4"
-    return session.get(url, timeout=10).json()
+    try:
+        # Falla rápido: Si en 4 segundos no responde, abandona la consulta para no congelar la app
+        resp = requests.get(url, timeout=4)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except:
+        return None
 
 def obtener_clima_completo(lat, lon, offset_dias):
     try:
         resp = fetch_weather_api(lat, lon)
+        if not resp: 
+            return None, [], {}
+            
         lluvia_act = resp.get("current", {}).get("precipitation", 0.0) if offset_dias == 0 else None
         
         horas = resp["hourly"]["time"]
@@ -164,7 +168,6 @@ def generar_mini_banner(resumen):
     icono = "⚠️" if pico_mm >= 2.0 else "💧"
     return f"<div class='mini-banner {clase}'>{icono} Riesgo en {turno} ({pico_mm:.2f}mm)</div>"
 
-# Estilos Pandas
 def color_lluvia(val):
     if val >= 5.0: return 'background-color: #ffcdd2; color: #b71c1c'
     elif val >= 1.5: return 'background-color: #ffe0b2; color: #e65100'
@@ -238,7 +241,7 @@ def tablero_realtime():
         with cols[i % 2]: 
             renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, ciudad_sel=="Potential Cities")
 
-# 5. MENÚ LATERAL Y EXCEL (Histórico)
+# 5. MENÚ LATERAL Y EXCEL
 def clasificar_ocasion(hora):
     if 0 <= hora < 7: return "1.Madrugada"
     elif 7 <= hora < 10: return "2.Mañana"
@@ -256,16 +259,19 @@ def generar_dataset_nacional():
             ciudad, zona_nom = (region, zona) if region in ["Quito", "Guayaquil"] else (zona, region)
             try:
                 url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&past_days=14&forecast_days=7"
-                resp = session.get(url, timeout=10).json()
-                for i, t in enumerate(resp["hourly"]["time"]):
+                # Freno táctico integrado directamente
+                time.sleep(0.4) 
+                resp = requests.get(url, timeout=5)
+                if resp.status_code != 200:
+                    continue
+                resp_json = resp.json()
+                
+                for i, t in enumerate(resp_json["hourly"]["time"]):
                     dt = datetime.strptime(t, "%Y-%m-%dT%H:%M")
-                    rain = resp["hourly"]["precipitation"][i] or 0.0
-                    prob = resp["hourly"].get("precipitation_probability", [])
+                    rain = resp_json["hourly"]["precipitation"][i] or 0.0
+                    prob = resp_json["hourly"].get("precipitation_probability", [])
                     p = prob[i] if i < len(prob) and prob[i] else 0
                     registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": rain, "probabilidad_%": p})
-                
-                # Freno de seguridad para no saturar la API al compilar todo el país
-                time.sleep(0.3)
             except: continue
     
     df = pd.DataFrame(registros)
@@ -286,7 +292,7 @@ else:
     st.markdown("### 📊 Data Completa por Ciudad y Zona: 14 Días Histórico y 7 Días Forecast")
     st.markdown("Genera la matriz de datos base para modelar incentivos logísticos y analizar performance.")
     if st.button("Procesar y Descargar Matriz"):
-        with st.spinner("Procesando datos (Esto tomará unos segundos por seguridad anti-bloqueo)..."):
+        with st.spinner("Conectando satélites (Esto tomará unos 15 segundos por seguridad)..."):
             df_final = generar_dataset_nacional()
             if not df_final.empty:
                 st.success("Data lista.")
@@ -294,3 +300,5 @@ else:
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as w: df_final.to_excel(w, index=False)
                 st.download_button("📥 Descargar Excel", buffer.getvalue(), f"PeYa_Weather_{hoy_dt.strftime('%Y%m%d')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+            else:
+                st.error("⚠️ La API está temporalmente bloqueada. Intenta en 15 minutos.")

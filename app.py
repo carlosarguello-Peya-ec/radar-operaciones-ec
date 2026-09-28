@@ -1,21 +1,25 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 import io
+import time
 
-# 1. CONFIGURACIÓN Y ESTILOS
+# 1. CONFIGURACIÓN DE PÁGINA Y SESIÓN BLINDADA (ANTI-BLOQUEOS)
 st.set_page_config(page_title="Weather LOps - Peya Ecuador", layout="wide", initial_sidebar_state="expanded")
+
+session = requests.Session()
+retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+session.mount('https://', HTTPAdapter(max_retries=retries))
 
 st.markdown("""
 <style>
     .stApp { background-color: #F7F7F7; }
-    /* Solo el título principal h1 será rojo Peya */
     h1 { color: #EA044E !important; font-family: 'Arial', sans-serif; }
-    /* Los subtítulos h2, h3, h4 serán gris oscuro */
     h2, h3, h4 { color: #333333 !important; font-family: 'Arial', sans-serif; }
-    /* Los números de las métricas (mm/h) ahora son oscuros, NO rojos */
     div[data-testid="stMetricValue"] { color: #333333 !important; font-weight: bold; }
     
     .resumen-caja { background-color: #FFFFFF; padding: 10px; border-radius: 8px; border: 1px solid #E0E0E0; text-align: center; margin-bottom: 10px;}
@@ -82,7 +86,7 @@ DIAS_MAP = {
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_weather_api(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&forecast_days=4"
-    return requests.get(url, timeout=5).json()
+    return session.get(url, timeout=10).json()
 
 def obtener_clima_completo(lat, lon, offset_dias):
     try:
@@ -145,9 +149,9 @@ def generar_smart_text(resumen, zonas_riesgo=None):
     if t == max(m, t, n) and t >= 2.0: 
         return f"⚠️ <b>Alerta Lunch / Tarde:</b> Se pronostican lluvias fuertes ({t:.2f}mm) en el turno de la tarde.{texto_zonas}", "smart-red"
     if n == max(m, t, n) and n >= 2.0: 
-        return f"⚠️ <b>Alerta Dinner / Noche:</b> Condiciones estables de día, pero lloverá fuerte en la noche ({n:.2f}mm).{texto_zonas}", "smart-red"
+        return f"⚠️ <b>Alerta Dinner / Noche:</b> Condiciones estables de día, pero pronóstico de lluvias en la noche ({n:.2f}mm).{texto_zonas}", "smart-red"
     if m == max(m, t, n) and m >= 2.0: 
-        return f"🌧️ <b>Precaución Matutina:</b> Lluvia moderada en la mañana ({m:.2f}mm). Mejoran las condiciones para los picos de demanda.{texto_zonas}", "smart-yellow"
+        return f"🌧️ <b>Precaución Matutina:</b> Lluvia moderada en la mañana ({m:.2f}mm). Condiciones favorables para los picos de demanda.{texto_zonas}", "smart-yellow"
     
     return f"🌤️ <b>Condiciones Manejables:</b> Jornada mayormente seca con posibles garúas aisladas.{texto_zonas}", "smart-yellow"
 
@@ -172,11 +176,10 @@ def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_sma
     with st.container(border=True):
         st.markdown(f"<p style='margin:0; font-weight:bold; color:#333; font-size:1.2rem;'>{nombre}</p>", unsafe_allow_html=True)
         
-        # NUEVO: Si no hay datos, mostramos el error claramente en vez de dejar vacío
         if not resumen:
             st.warning("⚠️ Sin conexión (API saturada). Intenta en unos minutos.")
             return
-            
+
         if lluvia_act is not None:
             estado = "🚨 Alerta Fuerte" if lluvia_act >= 7.5 else "🌧️ Lluvia Moderada" if lluvia_act >= 2.0 else "💧 Garúa" if lluvia_act > 0 else "☀️ Normal"
             st.metric(label=estado, value=f"{lluvia_act:.2f} mm/h")
@@ -253,13 +256,16 @@ def generar_dataset_nacional():
             ciudad, zona_nom = (region, zona) if region in ["Quito", "Guayaquil"] else (zona, region)
             try:
                 url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation,precipitation_probability&timezone=America%2FGuayaquil&past_days=14&forecast_days=7"
-                resp = requests.get(url, timeout=10).json()
+                resp = session.get(url, timeout=10).json()
                 for i, t in enumerate(resp["hourly"]["time"]):
                     dt = datetime.strptime(t, "%Y-%m-%dT%H:%M")
                     rain = resp["hourly"]["precipitation"][i] or 0.0
                     prob = resp["hourly"].get("precipitation_probability", [])
                     p = prob[i] if i < len(prob) and prob[i] else 0
                     registros.append({"fecha": dt.strftime("%Y-%m-%d"), "city_name": ciudad, "zone_name": zona_nom, "hora_int": dt.hour, "lluvia_mm": rain, "probabilidad_%": p})
+                
+                # Freno de seguridad para no saturar la API al compilar todo el país
+                time.sleep(0.3)
             except: continue
     
     df = pd.DataFrame(registros)
@@ -280,7 +286,7 @@ else:
     st.markdown("### 📊 Data Completa por Ciudad y Zona: 14 Días Histórico y 7 Días Forecast")
     st.markdown("Genera la matriz de datos base para modelar incentivos logísticos y analizar performance.")
     if st.button("Procesar y Descargar Matriz"):
-        with st.spinner("Procesando millones de puntos de data..."):
+        with st.spinner("Procesando datos (Esto tomará unos segundos por seguridad anti-bloqueo)..."):
             df_final = generar_dataset_nacional()
             if not df_final.empty:
                 st.success("Data lista.")

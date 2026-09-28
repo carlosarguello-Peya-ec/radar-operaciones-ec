@@ -172,9 +172,15 @@ def renderizar_tarjeta_zona(nombre, lluvia_act, tabla_data, resumen, mostrar_sma
     with st.container(border=True):
         st.markdown(f"<p style='margin:0; font-weight:bold; color:#333; font-size:1.2rem;'>{nombre}</p>", unsafe_allow_html=True)
         
+        # NUEVO: Si no hay datos, mostramos el error claramente en vez de dejar vacío
+        if not resumen:
+            st.warning("⚠️ Sin conexión (API saturada). Intenta en unos minutos.")
+            return
+            
         if lluvia_act is not None:
             estado = "🚨 Alerta Fuerte" if lluvia_act >= 7.5 else "🌧️ Lluvia Moderada" if lluvia_act >= 2.0 else "💧 Garúa" if lluvia_act > 0 else "☀️ Normal"
             st.metric(label=estado, value=f"{lluvia_act:.2f} mm/h")
+            
         if resumen:
             st.markdown(generar_mini_banner(resumen), unsafe_allow_html=True)
             if mostrar_smart:
